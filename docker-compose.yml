@@ -10,3 +10,18 @@ services:
       - ./mosquitto/data:/mosquitto/data
       - ./mosquitto/log:/mosquitto/log
     restart: unless-stopped
+
+  streamlit:
+    build: ./python
+    container_name: streamlit
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./python:/app
+    env_file:
+      - ./python/.env
+    environment:
+      - MQTT_BROKER=mosquitto
+    depends_on:
+      - mosquitto
+    restart: unless-stopped
