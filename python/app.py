@@ -26,7 +26,7 @@ class AppConfig:
 
     BROKER: str = os.getenv("MQTT_BROKER", "localhost")
     PORT: int = int(os.getenv("MQTT_PORT", 1883))
-    TOPIC: str = os.getenv("MQTT_TOPIC", "sensor/all")
+    TOPIC: str = os.getenv("MQTT_TOPIC", "sensor/+")
     KEEPALIVE: int = int(os.getenv("MQTT_KEEPALIVE", 60))
     PAGE_TITLE: str = "Industrial IoT Monitor"
     PAGE_ICON: str = "🏭"
@@ -41,16 +41,21 @@ st.set_page_config(
 )
 
 
-# --- STATE MANAGEMENT ---
-class MQTTState:
-    """Singleton class to hold application state."""
-
-    def __init__(self):
-        self.connected: bool = False
+# --- DATA STRUCTURES ---
+class DeviceData:
+    def __init__(self, name: str):
+        self.name = name
         self.history: List[Dict[str, Any]] = []
         self.latest: Dict[str, Any] = {}
         self.previous: Dict[str, Any] = {}
+        self.last_update: float = time.time()
         self.max_history: int = 100
+
+
+class MQTTState:
+    def __init__(self):
+        self.connected: bool = False
+        self.devices: Dict[str, DeviceData] = {}
 
 
 @st.cache_resource
@@ -101,16 +106,34 @@ def on_message(client: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> Non
         msg: The actual message object containing topic and payload.
     """
     try:
+        # 1. Wyciągnij nazwę urządzenia z tematu
+        # np. sensor/jadwiga -> jadwiga
+        topic_parts = msg.topic.split("/")
+        device_name = topic_parts[-1] if len(topic_parts) > 1 else "Unknown"
+
+        # 2. Parsuj JSON
         payload = json.loads(msg.payload.decode())
 
-        if userdata.latest:
-            userdata.previous = userdata.latest.copy()
+        # 3. Jeśli to nowe urządzenie, dodaj je do słownika devices
+        if device_name not in userdata.devices:
+            # Tworzymy nową instancję DeviceData
+            userdata.devices[device_name] = DeviceData(device_name)
+            logger.info(f"New Device Detected: {device_name}")
 
-        userdata.latest = payload
-        userdata.history.append(payload)
+        # 4. Pobierz obiekt konkretnego urządzenia
+        device = userdata.devices[device_name]
 
-        if len(userdata.history) > userdata.max_history:
-            userdata.history.pop(0)
+        # 5. Zapisz dane W KONKRETNYM URZĄDZENIU (a nie w userdata.latest!)
+        if device.latest:
+            device.previous = device.latest.copy()
+
+        device.latest = payload
+        device.history.append(payload)
+        device.last_update = time.time()
+
+        # Limit historii
+        if len(device.history) > device.max_history:
+            device.history.pop(0)
 
     except json.JSONDecodeError:
         logger.error(f"Invalid JSON received: {msg.payload}")
@@ -155,25 +178,10 @@ def render_sidebar(state: MQTTState):
             st.error("🔴 Disconnected")
 
         st.divider()
-
         st.subheader("⚙️ Configuration")
-        # new_max = st.slider(
-        #     "Chart History (points)", min_value=50, max_value=500, value=100, step=50
-        # )
-        # state.max_history = new_max
-
+        st.info(f"Devices connected: {len(state.devices)}")
         st.badge(f"Topic: `{AppConfig.TOPIC}`", color="blue", icon="📓")
-
         st.divider()
-
-        # st.subheader("🧹 Data Management")
-
-        # left, right = st.columns(2)
-        # if left.button("Clear History", width="stretch", icon="🗑️"):
-        #     state.history = []
-        # if right.button("Clear All Data", width="stretch", icon="🧼"):
-        #     state.history = []
-        #     state.latest = {}
 
 
 def calculate_delta(current: float, previous: float) -> Optional[float]:
@@ -181,6 +189,234 @@ def calculate_delta(current: float, previous: float) -> Optional[float]:
     if previous is None:
         return None
     return round(current - previous, 2)
+
+
+def render_device_tab(device: DeviceData):
+    data = device.latest
+    prev = device.previous
+
+    st.caption(
+        f"Last update: {time.strftime('%H:%M:%S', time.localtime(device.last_update))}"
+    )
+
+    # --- KPI METRICS ---
+    # Używamy dynamicznego układu - wyświetlamy tylko to, co jest w danych
+
+    # Row 1: Environment & Status
+    c1, c2, c3 = st.columns(3)
+    c4, c5, c6 = st.columns(3)
+
+    with c1:
+        if "temperature" in data:
+            val = data["temperature"]
+            p_val = prev.get("temperature") if prev else None
+            st.metric(
+                label="Temp (In)",
+                value=f"{val} °C",
+                delta=(calculate_delta(val, p_val)),
+                help="Ambient temperature reading",
+                border=True,
+                chart_data=(
+                    pd.DataFrame(device.history)["temperature"]
+                    if device.history
+                    else None
+                ),
+            )
+
+    with c2:
+        if "temperature_out" in data:
+            val = data["temperature_out"]
+            p_val = prev.get("temperature_out") if prev else None
+            st.metric(
+                "Temp (Out)",
+                f"{val} °C",
+                calculate_delta(val, p_val),
+                border=True,
+                help="Outside temperature reading",
+                chart_data=(
+                    pd.DataFrame(device.history)["temperature_out"]
+                    if device.history
+                    else None
+                ),
+            )
+
+    with c3:
+        if "humidity_out" in data:
+            val = data["humidity_out"]
+            p_val = prev.get("humidity_out") if prev else None
+            st.metric(
+                "Humidity",
+                f"{val} %",
+                calculate_delta(val, p_val),
+                border=True,
+                help="Outside humidity reading",
+                chart_data=(
+                    pd.DataFrame(device.history)["humidity_out"]
+                    if device.history
+                    else None
+                ),
+            )
+
+    with c4:
+        if "gas_level" in data:
+            val = data["gas_level"]
+            p_val = prev.get("gas_level") if prev else None
+            status = (
+                "⚠️ DANGER" if val > 1000 else "⚠️ WARNING" if val > 700 else "✅ SAFE"
+            )
+            st.metric(
+                "Gas Sensor",
+                f"{val} ({status})",
+                calculate_delta(val, p_val),
+                delta_color="inverse",
+                border=True,
+                help="Gas concentration level (ppm)",
+                chart_data=(
+                    pd.DataFrame(device.history)["gas_level"]
+                    if device.history
+                    else None
+                ),
+            )
+
+    with c5:
+        if "motor_adc" in data:
+            val = data["motor_adc"]
+            p_val = prev.get("motor_adc") if prev else None
+            st.metric(
+                "Motor ADC",
+                f"{val}",
+                calculate_delta(val, p_val),
+                border=True,
+                help="Motor flow ADC value",
+                chart_data=(
+                    pd.DataFrame(device.history)["motor_adc"]
+                    if device.history
+                    else None
+                ),
+            )
+
+    with c6:
+        if "flame_status" in data:
+            val = data["flame_status"]
+            # 0 zazwyczaj oznacza wykrycie płomienia w tanich czujnikach cyfrowych, ale zależy od konfiguracji
+            label = "🔥 FIRE!" if val == 1 else "✅ Safe"
+            st.metric("Flame", label, border=True, help="Flame detection status")
+
+    # Row 2: Mechanics (Accel/Gyro)
+    # Wyświetlamy tylko jeśli są dane z akcelerometru
+    if "acceleration_x" in data:
+        st.markdown("##### ⚙️ Motion Data")
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+
+        acc_x = data.get("acceleration_x")
+        acc_x_prev = prev.get("acceleration_x") if prev else None
+        m1.metric(
+            "Acc X",
+            acc_x,
+            border=True,
+            help="Acceleration X-axis",
+            delta=calculate_delta(acc_x, acc_x_prev),
+            chart_data=(
+                pd.DataFrame(device.history)["acceleration_x"]
+                if device.history
+                else None
+            ),
+        )
+        acc_y = data.get("acceleration_y")
+        acc_y_prev = prev.get("acceleration_y") if prev else None
+        m2.metric(
+            "Acc Y",
+            acc_y,
+            border=True,
+            help="Acceleration Y-axis",
+            delta=calculate_delta(acc_y, acc_y_prev),
+            chart_data=(
+                pd.DataFrame(device.history)["acceleration_y"]
+                if device.history
+                else None
+            ),
+        )
+        acc_z = data.get("acceleration_z")
+        acc_z_prev = prev.get("acceleration_z") if prev else None
+        m3.metric(
+            "Acc Z",
+            acc_z,
+            border=True,
+            help="Acceleration Z-axis",
+            delta=calculate_delta(acc_z, acc_z_prev),
+            chart_data=(
+                pd.DataFrame(device.history)["acceleration_z"]
+                if device.history
+                else None
+            ),
+        )
+        gyro_x = data.get("gyro_x")
+        gyro_x_prev = prev.get("gyro_x") if prev else None
+        m4.metric(
+            "Gyro X",
+            gyro_x,
+            border=True,
+            help="Gyroscope X-axis",
+            delta=calculate_delta(gyro_x, gyro_x_prev),
+            chart_data=(
+                pd.DataFrame(device.history)["gyro_x"] if device.history else None
+            ),
+        )
+        gyro_y = data.get("gyro_y")
+        gyro_y_prev = prev.get("gyro_y") if prev else None
+        m5.metric(
+            "Gyro Y",
+            gyro_y,
+            border=True,
+            help="Gyroscope Y-axis",
+            delta=calculate_delta(gyro_y, gyro_y_prev),
+            chart_data=(
+                pd.DataFrame(device.history)["gyro_y"] if device.history else None
+            ),
+        )
+        gyro_z = data.get("gyro_z")
+        gyro_z_prev = prev.get("gyro_z") if prev else None
+        m6.metric(
+            "Gyro Z",
+            gyro_z,
+            border=True,
+            help="Gyroscope Z-axis",
+            delta=calculate_delta(gyro_z, gyro_z_prev),
+            chart_data=(
+                pd.DataFrame(device.history)["gyro_z"] if device.history else None
+            ),
+        )
+
+    st.divider()
+
+    # --- CHARTS ---
+    if len(device.history) > 2:
+        df = pd.DataFrame(device.history)
+
+        tab_env, tab_mot = st.tabs(["🌡️ Environment Charts", "⚙️ Mechanical Analysis"])
+
+        with tab_env:
+            # Wykres temperatur
+            cols_temp = [
+                c for c in ["temperature", "temperature_out"] if c in df.columns
+            ]
+            if cols_temp:
+                st.line_chart(df[cols_temp], height=250)
+
+            # Wykres gazu i wilgotności
+            c_left, c_right = st.columns(2)
+            if "gas_level" in df.columns:
+                c_left.area_chart(df["gas_level"], color="#ffaa00", height=200)
+            if "humidity_out" in df.columns:
+                c_right.line_chart(df["humidity_out"], color="#00aaff", height=200)
+
+        with tab_mot:
+            cols_acc = [c for c in df.columns if "acceleration" in c]
+            if cols_acc:
+                st.line_chart(df[cols_acc], height=300)
+            cols_gyro = [c for c in df.columns if "gyro" in c]
+            if cols_gyro:
+                st.line_chart(df[cols_gyro], height=300)
 
 
 # --- MAIN LOOP ---
@@ -198,286 +434,30 @@ def main():
         st.error("🚨 Critical Error: MQTT Broker is unreachable. Please check Docker.")
         st.stop()
 
-    # 3. Create Layout Placeholders
-    # Top KPI Row
-    st.markdown("### ⏱ Live Telemetry")
-    col1_row1, col2_row1, col3_row1, col4_row1, col5_row1, col6_row1 = st.columns(6)
-    col1_row2, col2_row2, col3_row2, col4_row2, col5_row2, col6_row2 = st.columns(6)
+    if not client:
+        st.stop()
 
-    with col1_row1:
-        metric_temp = st.empty()
-    with col2_row1:
-        metric_gas = st.empty()
-    with col3_row1:
-        metric_temp_out = st.empty()
-    with col4_row1:
-        metric_hum = st.empty()
-    with col5_row1:
-        metric_motor = st.empty()
-    with col6_row1:
-        metric_flame = st.empty()
-
-    with col1_row2:
-        metric_acc_x = st.empty()
-    with col2_row2:
-        metric_acc_y = st.empty()
-    with col3_row2:
-        metric_acc_z = st.empty()
-    with col4_row2:
-        metric_gyto_x = st.empty()
-    with col5_row2:
-        metric_gyto_y = st.empty()
-    with col6_row2:
-        metric_gyto_z = st.empty()
-
-    st.divider()
-
-    # Charts Section
-    st.markdown("### 📈 Analytics")
-    tab_env, tab_mech = st.tabs(["🌡️ Environmental Data", "⚙️ Mechanical Analysis"])
-
-    with tab_env:
-        chart_env_box_temp = st.empty()
-        chart_env_box = st.empty()
-    with tab_mech:
-        chart_mech_box = st.empty()
+    # Dynamic Container
+    main_container = st.empty()
 
     while True:
-        if state.latest:
-            data = state.latest
-            prev = state.previous
+        with main_container.container():
+            if not state.devices:
+                st.info(f"📡 Waiting for devices on `{AppConfig.TOPIC}`...")
+                st.write("Listening for: `sensor/jadwiga` or similar...")
+            else:
+                # Sortujemy nazwy, żeby kolejność zakładek nie skakała
+                device_names = sorted(list(state.devices.keys()))
 
-            # --- METRICS WITH DELTA ---
-            # Temperature
-            curr_temp = data.get("temperature", 0)
-            prev_temp = prev.get("temperature", 0) if prev else 0
-            metric_temp.metric(
-                label="Temperature",
-                value=f"{curr_temp} °C",
-                delta=calculate_delta(curr_temp, prev_temp),
-                help="Ambient temperature reading",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["temperature"]
-                    if state.history
-                    else None
-                ),
-            )
+                # Tworzymy zakładki dla każdego urządzenia
+                # Np. Tab 1: "JADWIGA", Tab 2: "GARAZ"
+                tabs = st.tabs([f"📍 {name.upper()}" for name in device_names])
 
-            # Gas
-            curr_gas = data.get("gas_level", 0)
-            prev_gas = prev.get("gas_level", 0) if prev else 0
-            gas_mess = (
-                f"DANGER"
-                if curr_gas > 1500
-                else "WARNING" if curr_gas > 1000 else "SAFE"
-            )
-            gas_mess += f" ({curr_gas} ppm)"
-            metric_gas.metric(
-                label="Gas Level",
-                value=gas_mess,
-                delta=calculate_delta(curr_gas, prev_gas),
-                delta_color="inverse",  # Higher gas is worse
-                help="Gas level",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["gas_level"] if state.history else None
-                ),
-            )
+                for i, name in enumerate(device_names):
+                    with tabs[i]:
+                        render_device_tab(state.devices[name])
 
-            # Temperature Outside
-            curr_temp_out = data.get("temperature_out", 0)
-            prev_temp_out = prev.get("temperature_out", 0) if prev else 0
-            metric_temp_out.metric(
-                label="Temperature Outside",
-                value=f"{curr_temp_out} °C",
-                delta=calculate_delta(curr_temp_out, prev_temp_out),
-                help="Outside temperature reading",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["temperature_out"]
-                    if state.history
-                    else None if state.history else None
-                ),
-            )
-
-            # Humidity
-            curr_hum = data.get("humidity_out", 0)
-            prev_hum = prev.get("humidity_out", 0) if prev else 0
-            metric_hum.metric(
-                label="Humidity",
-                value=f"{curr_hum} %",
-                delta=calculate_delta(curr_hum, prev_hum),
-                help="Ambient humidity level",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["humidity_out"]
-                    if state.history
-                    else None
-                ),
-            )
-
-            # Motor Status
-            motor_status = data.get("motor_adc", 0)
-            prev_motor_status = prev.get("motor_adc", 0) if prev else 0
-            metric_motor.metric(
-                label="Flow",
-                value=f"{motor_status}",
-                delta=calculate_delta(motor_status, prev_motor_status),
-                help="Motor ADC reading indicating flow status",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["motor_adc"] if state.history else None
-                ),
-            )
-
-            # Flame (Critical Logic)
-            flame_status = data.get("flame_status", 1)
-            metric_flame.metric(
-                label="Flame Sensor",
-                value="🔥 FIRE" if flame_status == 1 else "✅ Safe",
-                help=(
-                    "Flame detected! Immediate action required."
-                    if flame_status == 1
-                    else "No flame detected."
-                ),
-                border=True,
-            )
-
-            # Accelerometer X
-            curr_acc_x = data.get("acceleration_x", 0)
-            prev_acc_x = prev.get("acceleration_x", 0) if prev else 0
-            metric_acc_x.metric(
-                label="Accel X",
-                value=f"{curr_acc_x} m/s²",
-                delta=calculate_delta(curr_acc_x, prev_acc_x),
-                help="Acceleration on X-axis",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["acceleration_x"]
-                    if state.history
-                    else None
-                ),
-            )
-
-            # Accelerometer Y
-            curr_acc_y = data.get("acceleration_y", 0)
-            prev_acc_y = prev.get("acceleration_y", 0) if prev else 0
-            metric_acc_y.metric(
-                label="Accel Y",
-                value=f"{curr_acc_y} m/s²",
-                delta=calculate_delta(curr_acc_y, prev_acc_y),
-                help="Acceleration on Y-axis",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["acceleration_y"]
-                    if state.history
-                    else None
-                ),
-            )
-
-            # Accelerometer Z
-            curr_acc_z = data.get("acceleration_z", 0)
-            prev_acc_z = prev.get("acceleration_z", 0) if prev else 0
-            metric_acc_z.metric(
-                label="Accel Z",
-                value=f"{curr_acc_z} m/s²",
-                delta=calculate_delta(curr_acc_z, prev_acc_z),
-                help="Acceleration on Z-axis",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["acceleration_z"]
-                    if state.history
-                    else None
-                ),
-            )
-            # Gyroscope X
-            curr_gyro_x = data.get("gyro_x", 0)
-            prev_gyro_x = prev.get("gyro_x", 0) if prev else 0
-            metric_gyto_x.metric(
-                label="Gyro X",
-                value=f"{curr_gyro_x} °/s",
-                delta=calculate_delta(curr_gyro_x, prev_gyro_x),
-                help="Gyroscope on X-axis",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["gyro_x"] if state.history else None
-                ),
-            )
-            # Gyroscope Y
-            curr_gyro_y = data.get("gyro_y", 0)
-            prev_gyro_y = prev.get("gyro_y", 0) if prev else 0
-            metric_gyto_y.metric(
-                label="Gyro Y",
-                value=f"{curr_gyro_y} °/s",
-                delta=calculate_delta(curr_gyro_y, prev_gyro_y),
-                help="Gyroscope on Y-axis",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["gyro_y"] if state.history else None
-                ),
-            )
-            # Gyroscope Z
-            curr_gyro_z = data.get("gyro_z", 0)
-            prev_gyro_z = prev.get("gyro_z", 0) if prev else 0
-            metric_gyto_z.metric(
-                label="Gyro Z",
-                value=f"{curr_gyro_z} °/s",
-                delta=calculate_delta(curr_gyro_z, prev_gyro_z),
-                help="Gyroscope on Z-axis",
-                border=True,
-                chart_data=(
-                    pd.DataFrame(state.history)["gyro_z"] if state.history else None
-                ),
-            )
-
-            # --- CHARTS ---
-            if len(state.history) > 1:
-                df = pd.DataFrame(state.history)
-
-                with chart_env_box_temp:
-                    st.line_chart(
-                        df[
-                            [
-                                "temperature",
-                                "temperature_out",
-                            ]
-                        ],
-                        height=300,
-                    )
-                with chart_env_box:
-                    st.line_chart(
-                        df[["humidity_out", "gas_level", "motor_adc"]],
-                        height=300,
-                    )
-
-                with chart_mech_box:
-                    st.area_chart(
-                        df[
-                            [
-                                "acceleration_x",
-                                "gyro_x",
-                                "acceleration_y",
-                                "gyro_y",
-                                "acceleration_z",
-                                "gyro_z",
-                            ]
-                        ],
-                        color=[
-                            "#FF5500",
-                            "#FFAA00",
-                            "#00AAFF",
-                            "#0055FF",
-                            "#55FF00",
-                            "#AAFF00",
-                        ],
-                        height=300,
-                    )
-
-        elif state.connected:
-            chart_env_box.info("📡 Waiting for data stream from ESP32...")
-
-        time.sleep(0.05)
+        time.sleep(0.5)
 
 
 if __name__ == "__main__":
