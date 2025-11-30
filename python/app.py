@@ -201,18 +201,32 @@ def main():
     # 3. Create Layout Placeholders
     # Top KPI Row
     st.markdown("### ⏱ Live Telemetry")
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1_row1, col2_row1, col3_row1, col4_row1, col5_row1 = st.columns(5)
+    col1_row2, col2_row2, col3_row2, col4_row2, col5_row2, col6_row2 = st.columns(6)
 
-    with col1:
+    with col1_row1:
         metric_temp = st.empty()
-    with col2:
-        metric_smoke = st.empty()
-    with col3:
-        metric_sound = st.empty()
-    with col4:
-        metric_vib = st.empty()
-    with col5:
+    with col2_row1:
+        metric_gas = st.empty()
+    with col3_row1:
+        metric_temp_out = st.empty()
+    with col4_row1:
+        metric_hum = st.empty()
+    with col5_row1:
         metric_flame = st.empty()
+
+    with col1_row2:
+        metric_acc_x = st.empty()
+    with col2_row2:
+        metric_acc_y = st.empty()
+    with col3_row2:
+        metric_acc_z = st.empty()
+    with col4_row2:
+        metric_gyto_x = st.empty()
+    with col5_row2:
+        metric_gyto_y = st.empty()
+    with col6_row2:
+        metric_gyto_z = st.empty()
 
     st.divider()
 
@@ -221,6 +235,7 @@ def main():
     tab_env, tab_mech = st.tabs(["🌡️ Environmental Data", "⚙️ Mechanical Analysis"])
 
     with tab_env:
+        chart_env_box_temp = st.empty()
         chart_env_box = st.empty()
     with tab_mech:
         chart_mech_box = st.empty()
@@ -247,74 +262,199 @@ def main():
                 ),
             )
 
-            # Smoke
-            curr_smoke = data.get("smoke", 0)
-            prev_smoke = prev.get("smoke", 0) if prev else 0
-            metric_smoke.metric(
-                label="Smoke",
-                value=f"{curr_smoke} %",
-                delta=calculate_delta(curr_smoke, prev_smoke),
-                delta_color="inverse",  # Higher smoke is worse
-                help="Smoke level percentage",
+            # Gas
+            curr_gas = data.get("gas_level", 0)
+            prev_gas = prev.get("gas_level", 0) if prev else 0
+            gas_mess = (
+                f"DANGER"
+                if curr_gas > 1500
+                else "WARNING" if curr_gas > 1000 else "SAFE"
+            )
+            gas_mess += f" ({curr_gas} ppm)"
+            metric_gas.metric(
+                label="Gas Level",
+                value=gas_mess,
+                delta=calculate_delta(curr_gas, prev_gas),
+                delta_color="inverse",  # Higher gas is worse
+                help="Gas level",
                 border=True,
                 chart_data=(
-                    pd.DataFrame(state.history)["smoke"] if state.history else None
+                    pd.DataFrame(state.history)["gas_level"] if state.history else None
                 ),
             )
 
-            # Sound
-            curr_sound = data.get("sound", 0)
-            prev_sound = prev.get("sound", 0) if prev else 0
-            metric_sound.metric(
-                label="Sound",
-                value=f"{curr_sound} dB",
-                delta=calculate_delta(curr_sound, prev_sound),
-                help="Ambient sound level in decibels",
+            # Temperature Outside
+            curr_temp_out = data.get("temperature_out", 0)
+            prev_temp_out = prev.get("temperature_out", 0) if prev else 0
+            metric_temp_out.metric(
+                label="Temperature Outside",
+                value=f"{curr_temp_out} °C",
+                delta=calculate_delta(curr_temp_out, prev_temp_out),
+                help="Outside temperature reading",
                 border=True,
                 chart_data=(
-                    pd.DataFrame(state.history)["sound"] if state.history else None
+                    pd.DataFrame(state.history)["temperature_out"]
+                    if state.history
+                    else None if state.history else None
                 ),
             )
 
-            # Vibration
-            curr_vib = data.get("vibration", 0)
-            prev_vib = prev.get("vibration", 0) if prev else 0
-            metric_vib.metric(
-                label="Vibration",
-                value=f"{curr_vib} Hz",
-                delta=calculate_delta(curr_vib, prev_vib),
-                help="Vibration frequency in Hertz",
+            # Humidity
+            curr_hum = data.get("humidity_out", 0)
+            prev_hum = prev.get("humidity_out", 0) if prev else 0
+            metric_hum.metric(
+                label="Humidity",
+                value=f"{curr_hum} %",
+                delta=calculate_delta(curr_hum, prev_hum),
+                help="Ambient humidity level",
                 border=True,
                 chart_data=(
-                    pd.DataFrame(state.history)["vibration"] if state.history else None
+                    pd.DataFrame(state.history)["humidity_out"]
+                    if state.history
+                    else None
                 ),
             )
 
             # Flame (Critical Logic)
-            flame_val = data.get("flame", 1)
+            flame_status = data.get("flame_status", 1)
             metric_flame.metric(
                 label="Flame Sensor",
-                value="🔥 FIRE" if flame_val == 1 else "✅ Safe",
+                value="🔥 FIRE" if flame_status == 1 else "✅ Safe",
                 help=(
                     "Flame detected! Immediate action required."
-                    if flame_val == 1
+                    if flame_status == 1
                     else "No flame detected."
                 ),
                 border=True,
+            )
+
+            # Accelerometer X
+            curr_acc_x = data.get("acceleration_x", 0)
+            prev_acc_x = prev.get("acceleration_x", 0) if prev else 0
+            metric_acc_x.metric(
+                label="Accel X",
+                value=f"{curr_acc_x} m/s²",
+                delta=calculate_delta(curr_acc_x, prev_acc_x),
+                help="Acceleration on X-axis",
+                border=True,
+                chart_data=(
+                    pd.DataFrame(state.history)["acceleration_x"]
+                    if state.history
+                    else None
+                ),
+            )
+
+            # Accelerometer Y
+            curr_acc_y = data.get("acceleration_y", 0)
+            prev_acc_y = prev.get("acceleration_y", 0) if prev else 0
+            metric_acc_y.metric(
+                label="Accel Y",
+                value=f"{curr_acc_y} m/s²",
+                delta=calculate_delta(curr_acc_y, prev_acc_y),
+                help="Acceleration on Y-axis",
+                border=True,
+                chart_data=(
+                    pd.DataFrame(state.history)["acceleration_y"]
+                    if state.history
+                    else None
+                ),
+            )
+
+            # Accelerometer Z
+            curr_acc_z = data.get("acceleration_z", 0)
+            prev_acc_z = prev.get("acceleration_z", 0) if prev else 0
+            metric_acc_z.metric(
+                label="Accel Z",
+                value=f"{curr_acc_z} m/s²",
+                delta=calculate_delta(curr_acc_z, prev_acc_z),
+                help="Acceleration on Z-axis",
+                border=True,
+                chart_data=(
+                    pd.DataFrame(state.history)["acceleration_z"]
+                    if state.history
+                    else None
+                ),
+            )
+            # Gyroscope X
+            curr_gyro_x = data.get("gyro_x", 0)
+            prev_gyro_x = prev.get("gyro_x", 0) if prev else 0
+            metric_gyto_x.metric(
+                label="Gyro X",
+                value=f"{curr_gyro_x} °/s",
+                delta=calculate_delta(curr_gyro_x, prev_gyro_x),
+                help="Gyroscope on X-axis",
+                border=True,
+                chart_data=(
+                    pd.DataFrame(state.history)["gyro_x"] if state.history else None
+                ),
+            )
+            # Gyroscope Y
+            curr_gyro_y = data.get("gyro_y", 0)
+            prev_gyro_y = prev.get("gyro_y", 0) if prev else 0
+            metric_gyto_y.metric(
+                label="Gyro Y",
+                value=f"{curr_gyro_y} °/s",
+                delta=calculate_delta(curr_gyro_y, prev_gyro_y),
+                help="Gyroscope on Y-axis",
+                border=True,
+                chart_data=(
+                    pd.DataFrame(state.history)["gyro_y"] if state.history else None
+                ),
+            )
+            # Gyroscope Z
+            curr_gyro_z = data.get("gyro_z", 0)
+            prev_gyro_z = prev.get("gyro_z", 0) if prev else 0
+            metric_gyto_z.metric(
+                label="Gyro Z",
+                value=f"{curr_gyro_z} °/s",
+                delta=calculate_delta(curr_gyro_z, prev_gyro_z),
+                help="Gyroscope on Z-axis",
+                border=True,
+                chart_data=(
+                    pd.DataFrame(state.history)["gyro_z"] if state.history else None
+                ),
             )
 
             # --- CHARTS ---
             if len(state.history) > 1:
                 df = pd.DataFrame(state.history)
 
-                # Dynamiczne wykresy
+                with chart_env_box_temp:
+                    st.line_chart(
+                        df[
+                            [
+                                "temperature",
+                                "temperature_out",
+                            ]
+                        ],
+                        height=300,
+                    )
                 with chart_env_box:
-                    st.line_chart(df[["temperature", "smoke"]], height=300)
+                    st.line_chart(
+                        df[["humidity_out", "gas_level"]],
+                        height=300,
+                    )
 
                 with chart_mech_box:
                     st.area_chart(
-                        df[["vibration", "sound"]],
-                        color=["#FF5500", "#00AA00"],
+                        df[
+                            [
+                                "acceleration_x",
+                                "gyro_x",
+                                "acceleration_y",
+                                "gyro_y",
+                                "acceleration_z",
+                                "gyro_z",
+                            ]
+                        ],
+                        color=[
+                            "#FF5500",
+                            "#FFAA00",
+                            "#00AAFF",
+                            "#0055FF",
+                            "#55FF00",
+                            "#AAFF00",
+                        ],
                         height=300,
                     )
 
