@@ -1,31 +1,32 @@
 #include <Arduino.h>
-// #include <WiFi.h>
-// #include <PubSubClient.h>
+#include <WiFi.h>
+#include <PubSubClient.h>
 
 #include <Adafruit_MPU6050.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
+#include "DHTesp.h"
 
-// #include "secrets.h"
+#include "secrets.h"
 
 #define DEBUG true
 #define FLAME_PIN 12       // flame sensor - digital
-#define GAS_PIN 14         // MQ gas - analog
+#define GAS_PIN 34         // MQ gas - analog
+#define DHT_PIN 33         // DHT22 sensor pin
 #define MOTOR_ADC_PIN 35   // motor voltage measurement
 #define MOTOR_SHUNT_PIN 34 // motor current measurement through shunt resistor
 #define R_SHUNT 47         // shunt resistor in Ohms
 
 // --- WiFi and MQTT Variables ---
-// const char *ssid = WIFI_SSID;
-// const char *password = WIFI_PASSWORD;
-// const char *mqtt_server = MQTT_SERVER_IP;
+const char *ssid = WIFI_SSID;
+const char *password = WIFI_PASSWORD;
+const char *mqtt_server = MQTT_SERVER_IP;
 
-// const char *topic = "sensor/all";
+const char *topic = "sensor/all";
 
-// WiFiClient espClient;
-// PubSubClient client(espClient);
-// long lastMsg = 0;
-// int value = 0;
+WiFiClient espClient;
+PubSubClient client(espClient);
+long lastMsg = 0;
 
 // --- MPU6050 Variables ---
 Adafruit_MPU6050 mpu;
@@ -34,72 +35,77 @@ int gyro_x, gyro_y, gyro_z;
 int temperature;
 
 // --- Flame Sensor Variables ---
-bool flame_status = false;
+int flame_status = 1;
 
 // --- Gas Sensor Variables ---
 int gas_level = 0;
 
-// void setup_wifi()
-// {
-//   delay(10);
+// --- DHT22 Variables ---
+DHTesp dht;
+float dht_temperature = 0;
+float dht_humidity = 0;
 
-//   if (DEBUG)
-//   {
-//     Serial.println();
-//     Serial.print("Connecting to WiFi: ");
-//     Serial.println(ssid);
-//   }
+void setup_wifi()
+{
+  delay(10);
 
-//   WiFi.begin(ssid, password);
+  if (DEBUG)
+  {
+    Serial.println();
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(ssid);
+  }
 
-//   while (WiFi.status() != WL_CONNECTED)
-//   {
-//     delay(500);
-//     if (DEBUG)
-//     {
-//       Serial.print(".");
-//     }
-//   }
+  WiFi.begin(ssid, password);
 
-//   if (DEBUG)
-//   {
-//     Serial.println("");
-//     Serial.println("WiFi connected");
-//     Serial.println("ESP32 IP Address: ");
-//     Serial.println(WiFi.localIP());
-//   }
-// }
+  while (WiFi.status() != WL_CONNECTED)
+  {
+    delay(500);
+    if (DEBUG)
+    {
+      Serial.print(".");
+    }
+  }
 
-// void reconnect()
-// {
-//   // Loop to reconnect to MQTT
-//   while (!client.connected())
-//   {
-//     if (DEBUG)
-//     {
-//       Serial.print("Connecting to MQTT...");
-//     }
-//     // Trying to connect with ID "ESP32Client"
-//     if (client.connect("ESP32Client"))
-//     {
-//       if (DEBUG)
-//       {
-//         Serial.println("connected!");
-//       }
-//     }
-//     else
-//     {
-//       if (DEBUG)
-//       {
-//         Serial.print("error, rc=");
-//         Serial.print(client.state());
-//         Serial.println(" trying again in 5 seconds");
-//       }
-//       // Wait 5 seconds before retrying
-//       delay(5000);
-//     }
-//   }
-// }
+  if (DEBUG)
+  {
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Serial.println("ESP32 IP Address: ");
+    Serial.println(WiFi.localIP());
+  }
+}
+
+void reconnect()
+{
+  // Loop to reconnect to MQTT
+  while (!client.connected())
+  {
+    if (DEBUG)
+    {
+      Serial.print("Connecting to MQTT...");
+    }
+    // Trying to connect with ID "ESP32Client"
+    if (client.connect("ESP32Client"))
+    {
+      if (DEBUG)
+      {
+        Serial.println("connected!");
+      }
+    }
+    else
+    {
+      if (DEBUG)
+      {
+        Serial.print("error, rc=");
+        Serial.print(client.state());
+        Serial.println(" trying again in 5 seconds");
+      }
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
 
 void setup()
 {
@@ -110,11 +116,10 @@ void setup()
     {
       delay(10);
     }
-    Serial.println("Adafruit MPU6050 test!");
   }
 
-  // setup_wifi();
-  // client.setServer(mqtt_server, 1883);
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
 
   // --- MPU6050 Setup ---
   if (!mpu.begin())
@@ -142,45 +147,12 @@ void setup()
   pinMode(FLAME_PIN, INPUT);
 
   // Analog sensors
-  pinMode(GAS_PIN, INPUT);
+  pinMode(14, INPUT);
   pinMode(MOTOR_ADC_PIN, INPUT);
   pinMode(MOTOR_SHUNT_PIN, INPUT);
+
+  dht.setup(DHT_PIN, DHTesp::DHT22);
 }
-
-// void loop()
-// {
-//   if (!client.connected())
-//   {
-//     reconnect();
-//   }
-//   client.loop();
-
-//   long now = millis();
-//   if (now - lastMsg > 1000)
-//   {
-//     lastMsg = now;
-//     value++;
-
-//     int temp = 20 + (value % 15);
-//     int flame = value % 2;
-//     int smoke = (value * 5) % 100;
-//     int sound = (value * 3) % 1024;
-//     int vibration = (value * 10) % 50;
-
-//     char msg[256];
-//     snprintf(msg, 256,
-//              "{\"temperature\":%d,\"flame\":%d,\"smoke\":%d,\"sound\":%d,\"vibration\":%d}",
-//              temp, flame, smoke, sound, vibration);
-
-//     if (DEBUG)
-//     {
-//       Serial.print("Sending JSON: ");
-//       Serial.println(msg);
-//     }
-
-//     client.publish(topic, msg);
-//   }
-// }
 
 void get_mpu_data()
 {
@@ -225,17 +197,17 @@ void get_mpu_data()
 
 void get_flame_data()
 {
-  flame_status = (digitalRead(FLAME_PIN) != HIGH); // high means no flame
+  flame_status = digitalRead(FLAME_PIN);
 
   if (DEBUG)
   {
     if (flame_status)
     {
-      Serial.println("Safe: No flame detected.");
+      Serial.println("🔥🔥🔥 FIRE DETECTED! 🔥🔥🔥");
     }
     else
     {
-      Serial.println("🔥🔥🔥 FIRE DETECTED! 🔥🔥🔥");
+      Serial.println("Safe: No flame detected.");
     }
   }
 }
@@ -250,14 +222,77 @@ void get_gas_data()
   }
 }
 
+void get_dht_data()
+{
+  TempAndHumidity data = dht.getTempAndHumidity();
+  if (isnan(data.temperature) || isnan(data.humidity))
+  {
+    if (DEBUG)
+    {
+      Serial.println("Failed to read from DHT sensor!");
+    }
+  }
+  else
+  {
+    dht_humidity = data.humidity;
+    dht_temperature = data.temperature;
+    if (DEBUG)
+    {
+      Serial.print("Temperature (°C): ");
+      Serial.println(dht_temperature, 1);
+      Serial.print("Humidity (%): ");
+      Serial.println(dht_humidity, 1);
+    }
+  }
+}
+
 void loop()
 {
-  if (mpu.getMotionInterruptStatus())
+  if (!client.connected())
   {
-    get_mpu_data();
+    reconnect();
   }
+  client.loop();
 
-  get_flame_data();
-  get_gas_data();
-  delay(1000);
+  long now = millis();
+
+  if (now - lastMsg > 1000)
+  {
+    lastMsg = now;
+
+    // if (mpu.getMotionInterruptStatus())
+    // {
+    //   get_mpu_data();
+    // }
+    get_mpu_data();
+    get_flame_data();
+    get_gas_data();
+    get_dht_data();
+
+    char msg[256];
+    snprintf(msg, 256,
+             "{\"acceleration_x\":%d,\"acceleration_y\":%d,\"acceleration_z\":%d,"
+             "\"gyro_x\":%d,\"gyro_y\":%d,\"gyro_z\":%d,"
+             "\"temperature\":%d,"
+             "\"flame_status\":%d,"
+             "\"gas_level\":%d,"
+             "\"temperature_out\":%.2f,"
+             "\"humidity_out\":%.2f"
+             "}",
+             acceleration_x, acceleration_y, acceleration_z,
+             gyro_x, gyro_y, gyro_z,
+             temperature,
+             flame_status,
+             gas_level,
+             dht_temperature,
+             dht_humidity);
+
+    if (DEBUG)
+    {
+      Serial.print("Sending JSON: ");
+      Serial.println(msg);
+    }
+
+    client.publish(topic, msg);
+  }
 }
