@@ -10,12 +10,10 @@
 #include "secrets.h"
 
 #define DEBUG true
-#define FLAME_PIN 12       // flame sensor - digital
-#define GAS_PIN 34         // MQ gas - analog
-#define DHT_PIN 33         // DHT22 sensor pin
-#define MOTOR_ADC_PIN 35   // motor voltage measurement
-#define MOTOR_SHUNT_PIN 34 // motor current measurement through shunt resistor
-#define R_SHUNT 47         // shunt resistor in Ohms
+#define FLAME_PIN 12 // flame sensor - digital
+#define GAS_PIN 34   // MQ gas - analog
+#define DHT_PIN 33   // DHT22 sensor pin
+#define ADC_PIN 32   // motor current sensor - analog
 
 // --- WiFi and MQTT Variables ---
 const char *ssid = WIFI_SSID;
@@ -44,6 +42,9 @@ int gas_level = 0;
 DHTesp dht;
 float dht_temperature = 0;
 float dht_humidity = 0;
+
+// --- Mototr Current Sensor Variables ---
+int motor_adc_value = 0;
 
 void setup_wifi()
 {
@@ -148,10 +149,10 @@ void setup()
 
   // Analog sensors
   pinMode(14, INPUT);
-  pinMode(MOTOR_ADC_PIN, INPUT);
-  pinMode(MOTOR_SHUNT_PIN, INPUT);
 
   dht.setup(DHT_PIN, DHTesp::DHT22);
+  pinMode(ADC_PIN, INPUT);
+  analogSetPinAttenuation(ADC_PIN, ADC_0db);
 }
 
 void get_mpu_data()
@@ -246,6 +247,16 @@ void get_dht_data()
   }
 }
 
+void get_motor_current_data()
+{
+  motor_adc_value = analogRead(ADC_PIN);
+  if (DEBUG)
+  {
+    Serial.print("Motor: ");
+    Serial.println(motor_adc_value);
+  }
+}
+
 void loop()
 {
   if (!client.connected())
@@ -268,6 +279,7 @@ void loop()
     get_flame_data();
     get_gas_data();
     get_dht_data();
+    get_motor_current_data();
 
     char msg[256];
     snprintf(msg, 256,
@@ -277,7 +289,8 @@ void loop()
              "\"flame_status\":%d,"
              "\"gas_level\":%d,"
              "\"temperature_out\":%.2f,"
-             "\"humidity_out\":%.2f"
+             "\"humidity_out\":%.2f,"
+             "\"motor_adc\":%d"
              "}",
              acceleration_x, acceleration_y, acceleration_z,
              gyro_x, gyro_y, gyro_z,
@@ -285,7 +298,8 @@ void loop()
              flame_status,
              gas_level,
              dht_temperature,
-             dht_humidity);
+             dht_humidity,
+             motor_adc_value);
 
     if (DEBUG)
     {

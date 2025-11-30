@@ -201,7 +201,7 @@ def main():
     # 3. Create Layout Placeholders
     # Top KPI Row
     st.markdown("### ⏱ Live Telemetry")
-    col1_row1, col2_row1, col3_row1, col4_row1, col5_row1 = st.columns(5)
+    col1_row1, col2_row1, col3_row1, col4_row1, col5_row1, col6_row1 = st.columns(6)
     col1_row2, col2_row2, col3_row2, col4_row2, col5_row2, col6_row2 = st.columns(6)
 
     with col1_row1:
@@ -213,6 +213,8 @@ def main():
     with col4_row1:
         metric_hum = st.empty()
     with col5_row1:
+        metric_motor = st.empty()
+    with col6_row1:
         metric_flame = st.empty()
 
     with col1_row2:
@@ -312,6 +314,20 @@ def main():
                     pd.DataFrame(state.history)["humidity_out"]
                     if state.history
                     else None
+                ),
+            )
+
+            # Motor Status
+            motor_status = data.get("motor_adc", 0)
+            prev_motor_status = prev.get("motor_adc", 0) if prev else 0
+            metric_motor.metric(
+                label="Flow",
+                value=f"{motor_status}",
+                delta=calculate_delta(motor_status, prev_motor_status),
+                help="Motor ADC reading indicating flow status",
+                border=True,
+                chart_data=(
+                    pd.DataFrame(state.history)["motor_adc"] if state.history else None
                 ),
             )
 
@@ -431,7 +447,7 @@ def main():
                     )
                 with chart_env_box:
                     st.line_chart(
-                        df[["humidity_out", "gas_level"]],
+                        df[["humidity_out", "gas_level", "motor_adc"]],
                         height=300,
                     )
 
